@@ -1,4 +1,6 @@
 --!strict
+--!native
+--!optimize 2
 --[[
 	A module that doesn't use metatable magic or bindable events, pure table magic.
 	You need to unlink manually.
@@ -10,7 +12,7 @@
 -- private
 
 local CONSTANTS = {
-	LINK_LIMIT = 4,
+	LINK_LIMIT = 1024,
 	DEFAULT_ONCE = false
 }
 
@@ -165,6 +167,50 @@ local function disbandBind
 	binds[bind_name] = nil
 end
 
+local function triggerDeferred
+(
+	bind_name : string,
+	... 			: any
+): ()
+	
+	local bind : BindObject? = findBindByName(bind_name)
+	if (not bind) then
+		warn(REASONS.BIND_NOT_FOUND)
+		return
+	end
+
+	if (#bind.threads ~= 0) then
+		for _, thread in bind.threads do
+			coroutine.resume(thread, ...)
+		end
+		bind.threads = {}
+	end
+
+	if (bind.link_amount == 0) then
+		warn(REASONS.NO_FUNCS_LINKED)
+		return
+	end
+
+	local links = bind.connections
+	for _, link in links do
+		local func = link.func
+		if (not func) then
+			continue
+		end	
+		task.defer(function(...)
+			local success, message = pcall(func, ...)
+			if (link.once) then
+				bind.connections[link.name] = nil
+				bind.link_amount -= 1
+			end
+			if (success) then
+				return
+			end
+			warn(`Error {message} encountered while triggering bind.`)
+		end, ...)
+	end
+end
+
 local function triggerBind
 (
 	bind_name : string,
@@ -268,13 +314,16 @@ local function newBind
 	binds[bind_name] = bind
 end
 
-return {
-	newBind		   	  = newBind,
-	overrideBind    = overrideBind,
-	triggerBind 	  = triggerBind,
-	disbandBind 	  = disbandBind,
-	cleanBind   	  = cleanBind,
-	bindFunction	  = bindFunction,
-	unbindFunction  = unbindFunction,
-	awaitTrigger    = awaitTrigger,
-}
+return table.freeze(
+	{
+		newBind		   	  = newBind,
+		overrideBind    = overrideBind,
+		trigger 	  		= triggerBind,
+		triggerDeferred = triggerDeferred,
+		disbandBind 	  = disbandBind,
+		cleanBind   	  = cleanBind,
+		bindFunction	  = bindFunction,
+		unbindFunction  = unbindFunction,
+		awaitTrigger    = awaitTrigger,
+	}
+)
