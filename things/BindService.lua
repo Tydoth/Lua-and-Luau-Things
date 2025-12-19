@@ -1,3 +1,7 @@
+
+-- Info
+--------------------------------------------------------------
+
 --!strict
 --!optimize 2
 --[[
@@ -9,18 +13,60 @@
 	
 	TODO:
 	* Implement GC'd binds after a long pass (DONE)
-	* Implement a way to get all binds
+	* Implement a way to get binds (DONE)
+	* 
 ]]
 
--- private
+-- Types
+--------------------------------------------------------------
+
+type GarbageCollectorSettings = {
+	enabled  : boolean,
+	interval : number
+}
+
+type GarbageCollectorProps = {
+	enabled    : boolean?,
+	interval   : number?
+}
+
+type LinkProps = {
+	happen_once : boolean?
+}
+
+type BindObjectProps = {
+	can_disband : boolean?,
+	link_limit  : number?,
+	decay_time  : number? -- automatically gives it to gc list if this arg is provided
+}
+
+export type Link = {
+	name : string,
+	func : (... any) -> (... any),
+	once : boolean
+}
+
+export type BindObject = {
+	connections : {
+		[string] : Link
+	},
+	threads			: {thread},
+	name 				: string,
+	can_disband : boolean,
+	link_limit  : number,
+	link_amount : number,
+	decay_time  : number?
+}
+
+-- Variables
+--------------------------------------------------------------
 
 local CONSTANTS = {
 	LINK_LIMIT      = 8, -- useful for preventing memory leaks 
-  DEFAULT_ONCE    = false,
-  DEFAULT_GC_MODE = false, -- garbage collected,
-  DEFAULT_GC_CLEAN_TIME = 300, -- time when gc'd binds are cleaned
-  DEFAULT_GC_CLEAN_INTERVAL = 1, -- clean gc'd binds after some time,
-  SERVICE_INIT_TAG = "ServitAlreadyRunningOrSomething"
+	DEFAULT_ONCE    = false,
+	DEFAULT_GC_MODE = false, -- garbage collected,
+	DEFAULT_GC_CLEAN_INTERVAL = 1, -- clean gc'd binds after some time,
+	DEFAULT_CLEAN_GC_BINDS = true -- clean gc'd binds if gc gets disabled
 }
 
 local REASONS = {
@@ -30,45 +76,30 @@ local REASONS = {
 	NO_FUNCS_LINKED    = `[{script}] - Bind doesn't have links!`,
 	NOT_DISBANDABLE    = `[{script}] - Bind can't be disbanded!`,
 	BIND_EXISTS        = `[{script}] - Bind with name already exists!`,
-  LINK_LIMIT_REACHED = `[{script}] - Bind's link limit reached!`,
-  GC_BIND_NOT_FOUND  = `[{script} Internal] - Garbage Collected Bind not found.`
+	LINK_LIMIT_REACHED = `[{script}] - Bind's link limit reached!`,
+	GC_BIND_NOT_FOUND  = `[{script} Internal] - Garbage Collected Bind not found.`,
+	GC_INFO_NOT_GIVEN  = `[{script}] - Garbage Collector settings not provided.` ,
+	GC_TOGGLE_IS_NIL   = `[{script}] - Garbage Collector toggle not provided.`,
+	GC_IS_DISABLED     = `[{script}] - Tried to add garbage collected Bind when Garbage Collector is disabled.`
 }
 
-type LinkProps = {
-	happen_once : boolean?
+local garbage_collector_settings : GarbageCollectorSettings = {
+	enabled 			 = CONSTANTS.DEFAULT_GC_MODE,
+	interval			 = CONSTANTS.DEFAULT_GC_CLEAN_INTERVAL
 }
 
-type Link = {
-	name : string,
-	func : (... any) -> (... any),
-	once : boolean
-}
-
-type BindObjectProps = {
-	can_disband : boolean?,
-  link_limit  : number?,
-  decay_time  : number? -- automatically gives it to gc list if this arg is provided
-}
-
-type BindObject = {
-	connections : {
-		[string] : Link
-	},	
-	threads			: {thread},
-	name 				: string,
-	can_disband : boolean,
-	link_limit  : number,
-  link_amount : number,
-  decay_time  : number?
-}
-
+local service_running : boolean = false
 local binds : {[string]: BindObject} = {}
 local garbage_collected_binds : {
-  [string]: {
-    name    : string,
-    gc_time : number
-  }
+	[string]: {
+		name    : string,
+		gc_time : number
+	}
 } = {}
+
+-- Private Functions
+--------------------------------------------------------------
+
 
 local function findBindByName
 (
@@ -123,6 +154,13 @@ local function triggerFunc
   warn(`Error {message} encountered while triggering bind.`)
 end
 
+local function cleanGarbageCollectedBinds(): ()
+	if (not CONSTANTS.DEFAULT_CLEAN_GC_BINDS) then
+		return
+	end
+	garbage_collected_binds = {}
+end
+
 local function destroyGarbageCollectedBind
 (
   name: string
@@ -133,14 +171,14 @@ local function destroyGarbageCollectedBind
     return
   end
   binds[name] = nil
-  garbage_collected_binds[name] = nil
 end
 
 local function updateGarbageCollectedBinds(): ()
   local binds = garbage_collected_binds
   for _, bind in binds do
-    bind.gc_time -= 1
-    if (bind.gc_time <= 0)  then
+    bind.gc_time -= garbage_collector_settings.interval
+		if (bind.gc_time <= 0) then
+		 garbage_collected_binds[bind.name] = nil
      destroyGarbageCollectedBind(bind.name)
     end
   end
@@ -148,7 +186,12 @@ end
 
 local function serviceLoop(): ()
   while (true) do
-    task.wait(CONSTANTS.DEFAULT_GC_CLEAN_INTERVAL)
+		task.wait(CONSTANTS.DEFAULT_GC_CLEAN_INTERVAL)
+		if (not garbage_collector_settings.enabled) then
+			cleanGarbageCollectedBinds()
+			service_running = false
+			return
+		end
     if (not next(garbage_collected_binds)) then
       continue
     end
@@ -157,15 +200,58 @@ local function serviceLoop(): ()
 end
 
 local function serviceInit(): ()
-  if (script:HasTag(CONSTANTS.SERVICE_INIT_TAG)) then
+  if (service_running) then
     return
   end
-  script:AddTag(CONSTANTS.SERVICE_INIT_TAG)
+	service_running = true
   task.spawn(serviceLoop)
 end
 
--- public
+-- Public Garbage Collector Functions
+--------------------------------------------------------------
 
+local function getGarbageCollectorSettings(): (GarbageCollectorSettings)
+	return garbage_collector_settings
+end
+
+-- Decides whether the garbage collector will run or not.
+local function toggleGarbageCollector
+(
+	enabled : boolean
+): ()
+
+	assert(
+		(enabled ~= nil),
+		REASONS.GC_TOGGLE_IS_NIL
+	)
+	garbage_collector_settings.enabled = enabled
+
+	if (enabled) then
+		if (service_running) then
+			return
+		end
+		task.spawn(serviceInit)
+	end
+end
+
+local function modifyGarbageCollectorSettings
+(
+	props : {interval : number?}
+): ()
+
+	assert(
+		props,
+		REASONS.GC_INFO_NOT_GIVEN
+	)
+
+	local interval   : number  = (props.interval or garbage_collector_settings.interval or 1)
+	garbage_collector_settings.interval = interval
+end
+
+-- Public Functions
+--------------------------------------------------------------
+
+-- Unlinks a function from a bind.
 local function unbindFunction
 (
 	bind_name : string,
@@ -186,6 +272,7 @@ local function unbindFunction
 	bind.connections[func_name] = nil
 end
 
+-- Links a function to a bind.
 local function bindFunction
 (
 	bind_name : string,
@@ -213,6 +300,7 @@ local function bindFunction
 	}
 end
 
+-- Waits until a given bind is triggered.
 local function awaitTrigger
 (
 	bind_name : string
@@ -228,6 +316,7 @@ local function awaitTrigger
 	return coroutine.yield()
 end
 
+-- Destroys a given bind if it exists.
 local function disbandBind
 (
 	bind_name : string
@@ -246,6 +335,7 @@ local function disbandBind
 	binds[bind_name] = nil
 end
 
+-- Similar to triggering, but waits until the next cycle.
 local function triggerDeferred
 (
 	bind_name : string,
@@ -281,6 +371,38 @@ local function triggerDeferred
 	end
 end
 
+-- Like triggering normally, but doesn't catch errors.
+local function triggerUnreliable
+(
+  bind_name : string,
+  ...       : any  
+): ()
+  
+  local bind : BindObject? = findBindByName(bind_name)
+  if (not bind) then
+    warn(REASONS.BIND_NOT_FOUND)
+    return
+  end
+  
+  if (#bind.threads ~= 0) then
+    for _, thread in bind.threads do
+      coroutine.resume(thread, ...)
+    end
+    bind.threads = {}
+  end
+  
+  if (bind.link_amount == 0) then
+    warn(REASONS.NO_FUNCS_LINKED)
+    return
+  end
+
+  local links = bind.connections
+  for _, link in links do
+    task.spawn(link.func, ...)
+  end
+end
+
+-- Triggers a bind, firing all functions and resuming threads.
 local function triggerBind
 (
 	bind_name : string,
@@ -313,6 +435,7 @@ local function triggerBind
 	end
 end
 
+-- Cleans a given bind's connections.
 local function cleanBind
 (
 	bind_name   : string
@@ -327,6 +450,7 @@ local function cleanBind
 	bind.connections = {}
 end
 
+-- Overrides bind settings.
 local function overrideBind
 (
 	bind_name   : string,
@@ -343,6 +467,7 @@ local function overrideBind
 	bind.can_disband = (bind_props.can_disband or bind.can_disband)
 end
 
+-- Creates a new bind.
 local function newBind
 (
 	bind_name   : string,
@@ -355,8 +480,7 @@ local function newBind
 		return
 	end
 
-	local new_props : BindObjectProps = (bind_props or {})
-
+	local new_props   : BindObjectProps = (bind_props or {})
 	local can_disband : boolean = new_props.can_disband or true
 	local link_limit  : number  = math.max(
 		CONSTANTS.LINK_LIMIT,
@@ -367,21 +491,39 @@ local function newBind
 		name 				= bind_name,
 		can_disband = (can_disband or true),
 		link_limit  = link_limit,
-    link_amount = 0,
-    decay_time  = (new_props.decay_time or nil),    
+    link_amount = 0, 
 		connections = {},
 		threads = {}
 	}
-  binds[bind_name] = bind
+	binds[bind_name] = bind
   
-  if (bind.decay_time) then
+	if (bind.decay_time) then
+		if (not garbage_collector_settings.enabled) then
+			warn(REASONS.GC_IS_DISABLED)
+			return
+		end
+		binds[bind_name].decay_time = bind.decay_time
     garbage_collected_binds[bind_name] = {
       name = bind_name,
       gc_time = bind.decay_time
     }
-  end
+	end
 end
 
+-- Gets bind by name.
+local function getBind
+(
+  name : string  
+): (BindObject?)
+  
+  local found_bind = findBindByName(name)
+  if (found_bind) then
+    return found_bind
+  end
+  return nil
+end
+
+-- Gets all binds present.
 local function getAllBinds(): ({
   [string] : BindObject
   })
@@ -389,19 +531,29 @@ local function getAllBinds(): ({
   return binds
 end
 
+-- On require
+--------------------------------------------------------------
+
 serviceInit()
 
 return table.freeze(
 	{
 		newBind		   	  = newBind,
-		overrideBind    = overrideBind,
-		trigger 	  		= triggerBind,
-		triggerDeferred = triggerDeferred,
+		overrideBind      = overrideBind, -- override functions
+		trigger 	      = triggerBind,
+    	triggerDeferred   = triggerDeferred,
+    	triggerUnreliable = triggerUnreliable,
 		disbandBind 	  = disbandBind,
 		cleanBind   	  = cleanBind,
 		bindFunction	  = bindFunction,
-		unbindFunction  = unbindFunction,
- 	    awaitTrigger    = awaitTrigger,
-    	getAllBinds     = getAllBinds
+		unbindFunction    = unbindFunction,
+    	awaitTrigger      = awaitTrigger,
+    	getBind           = getBind,
+		getAllBinds       = getAllBinds,
+		garbageCollector = {
+			modifySettings = modifyGarbageCollectorSettings,
+			getSettings    = getGarbageCollectorSettings,
+			toggle 				 = toggleGarbageCollector,
+		}
 	}
 )
