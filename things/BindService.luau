@@ -8,13 +8,15 @@
 	A module that doesn't use metatable magic or bindable events, pure table magic.
 	You need to unlink manually.
 	
-	made by Tydoth in like 30 minutes
+	made by Tydoth in like 30 minutes (for the initial module)
+	about 2 hours for the garbage collector and extra things like happening once or trigger with certain condition
 	it's literally impossible to make server to client communication without remotes
 	
 	TODO:
 	* Implement GC'd binds after a long pass (DONE)
 	* Implement a way to get binds (DONE)
-	* 
+	* Trigger function that returns every function's return value
+	* Developer mode
 ]]
 
 -- Types
@@ -154,6 +156,22 @@ local function triggerFunc
   warn(`Error {message} encountered while triggering bind.`)
 end
 
+local function continueHaltedThreads
+(
+  bind_name : string ,
+  ...       : any
+): ()
+  
+  if (#binds[bind_name].threads == 0) then
+    return
+  end
+  
+  for _, thread in binds[bind_name].threads do
+    coroutine.resume(thread, ...)
+  end
+  binds[bind_name].threads = {}
+end
+
 local function cleanGarbageCollectedBinds(): ()
 	if (not CONSTANTS.DEFAULT_CLEAN_GC_BINDS) then
 		return
@@ -207,8 +225,39 @@ local function serviceInit(): ()
   task.spawn(serviceLoop)
 end
 
+-- Public Utility Functions
+--------------------------------------------------------------
+
+local function getConstants()
+  return CONSTANTS
+end
+
+local function getAllBindNames(): ({[string]: string})
+  if (not next(binds)) then
+    return {}
+  end
+  
+  local names = {}
+  for name in binds do
+    names[name] = name
+  end
+  return names
+end
+
 -- Public Garbage Collector Functions
 --------------------------------------------------------------
+
+local function getGarbageCollectedBindNames(): ({[string]: string})
+  if (not next(garbage_collected_binds)) then
+    return {}
+  end
+  
+  local names = {}
+  for name in garbage_collected_binds do
+    names[name] = name
+  end
+  return names
+end
 
 local function getGarbageCollectorSettings(): (GarbageCollectorSettings)
 	return garbage_collector_settings
@@ -244,7 +293,7 @@ local function modifyGarbageCollectorSettings
 		REASONS.GC_INFO_NOT_GIVEN
 	)
 
-	local interval   : number  = (props.interval or garbage_collector_settings.interval or 1)
+	local interval : number  = (props.interval or garbage_collector_settings.interval or 1)
 	garbage_collector_settings.interval = interval
 end
 
@@ -331,7 +380,8 @@ local function disbandBind
 		warn(REASONS.NOT_DISBANDABLE)
 		return
 	end
-
+  continueHaltedThreads(bind_name, nil)
+  
 	binds[bind_name] = nil
 end
 
@@ -347,13 +397,7 @@ local function triggerDeferred
 		warn(REASONS.BIND_NOT_FOUND)
 		return
 	end
-
-	if (#bind.threads ~= 0) then
-		for _, thread in bind.threads do
-			coroutine.resume(thread, ...)
-		end
-		bind.threads = {}
-	end
+  continueHaltedThreads(bind_name, ...)
 
 	if (bind.link_amount == 0) then
 		warn(REASONS.NO_FUNCS_LINKED)
@@ -382,14 +426,8 @@ local function triggerUnreliable
   if (not bind) then
     warn(REASONS.BIND_NOT_FOUND)
     return
-  end
-  
-  if (#bind.threads ~= 0) then
-    for _, thread in bind.threads do
-      coroutine.resume(thread, ...)
-    end
-    bind.threads = {}
-  end
+  end 
+  continueHaltedThreads(bind_name, ...)
   
   if (bind.link_amount == 0) then
     warn(REASONS.NO_FUNCS_LINKED)
@@ -414,13 +452,7 @@ local function triggerBind
 		warn(REASONS.BIND_NOT_FOUND)
 		return
 	end
-
-	if (#bind.threads ~= 0) then
-		for _, thread in bind.threads do
-			coroutine.resume(thread, ...)
-		end
-		bind.threads = {}
-	end
+  continueHaltedThreads(bind_name, ...)
 
 	if (bind.link_amount == 0) then
 		warn(REASONS.NO_FUNCS_LINKED)
@@ -497,7 +529,7 @@ local function newBind
 	}
 	binds[bind_name] = bind
   
-	if (bind.decay_time) then
+	if (new_props.decay_time) then
 		if (not garbage_collector_settings.enabled) then
 			warn(REASONS.GC_IS_DISABLED)
 			return
@@ -505,7 +537,7 @@ local function newBind
 		binds[bind_name].decay_time = bind.decay_time
     garbage_collected_binds[bind_name] = {
       name = bind_name,
-      gc_time = bind.decay_time
+      gc_time = new_props.decay_time
     }
 	end
 end
@@ -537,23 +569,29 @@ end
 serviceInit()
 
 return table.freeze(
-	{
-		newBind		   	  = newBind,
-		overrideBind      = overrideBind, -- override functions
-		trigger 	      = triggerBind,
-    	triggerDeferred   = triggerDeferred,
-    	triggerUnreliable = triggerUnreliable,
-		disbandBind 	  = disbandBind,
-		cleanBind   	  = cleanBind,
-		bindFunction	  = bindFunction,
-		unbindFunction    = unbindFunction,
-    	awaitTrigger      = awaitTrigger,
-    	getBind           = getBind,
-		getAllBinds       = getAllBinds,
-		garbageCollector = {
-			modifySettings = modifyGarbageCollectorSettings,
-			getSettings    = getGarbageCollectorSettings,
-			toggle 				 = toggleGarbageCollector,
-		}
+  {
+    main = {
+      newBind		   	    = newBind,
+      overrideBind      = overrideBind, -- override functions
+      trigger 	  		  = triggerBind,
+      triggerDeferred   = triggerDeferred,
+      triggerUnreliable = triggerUnreliable,
+      awaitTrigger      = awaitTrigger,
+      disbandBind 	    = disbandBind,
+      cleanBind   	    = cleanBind,
+      bindFunction	    = bindFunction,
+      unbindFunction    = unbindFunction,
+    },
+		garbageCollector  = {
+			modifySettings  = modifyGarbageCollectorSettings,
+			getSettings     = getGarbageCollectorSettings,
+			toggle 				  = toggleGarbageCollector,
+    },
+    utility = {
+      getBind           = getBind,
+      getAllBinds       = getAllBinds,
+      getAllBindNames   = getAllBindNames,
+      getConstants      = getConstants
+    }
 	}
 )
