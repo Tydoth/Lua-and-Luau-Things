@@ -12,7 +12,7 @@
 		Unlike other modules, it uses pure table magic, so no
 		metatables or wrapping is happening.
 	]
-	@summary A event wrapper using tables.
+	@summary A event wrapper using pure tables.
 	
 	-- does it even need this or am i showing off
 	@author Tydoth
@@ -93,12 +93,14 @@ local CONSTANTS = {
 	DEFAULT_ONCE    = false,
 	DEFAULT_GC_MODE = false, -- garbage collected,
 	DEFAULT_GC_CLEAN_INTERVAL = 2, -- clean gc'd binds after some time,
+	DEFAULT_GC_CLEANUP_TIME = 0,
 	DEFAULT_CLEAN_GC_BINDS = true, -- clean gc'd binds if gc gets disabled,
 	BUILT_IN_BIND_NAMES = {
 		ADDED = "ADDED",
 		REMOVED = "REMOVED",
 		TRIGGERING = "TRIGGERING"
-	}
+	},
+	BUILT_IN_BIND_LINK_LIMIT = 128
 }
 
 local REASONS = {
@@ -194,21 +196,22 @@ local function triggerFunc
 	bind_name : string,
 	link      : Link,
 	...       : any
-): ()
+): (... any)
 
 	local func = link.func
 	if (not func) then
-		return
+		return nil
 	end	
-	local success, message = pcall(func, ...)
+	local success, result = pcall(func, ...)
 	if (link.once) then
 		binds[bind_name].connections[link.name] = nil
 		binds[bind_name].link_amount -= 1
 	end
 	if (success) then
-		return
+		return result
 	end
-	warn(`Error of "{message}" encountered while triggering bind.`)
+	warn(`Error of "{result}" encountered while triggering bind.`)
+	return nil
 end
 
 --[[
@@ -245,10 +248,10 @@ local function createBuiltInBinds(): ()
 	for _, bind in CONSTANTS.BUILT_IN_BIND_NAMES do -- there's nothing wrong with this??
 		local created : BindObject = {
 			name = bind,
-			link_limit = 64, -- i highly doubt it'll reach thtis
+			link_limit = CONSTANTS.BUILT_IN_BIND_LINK_LIMIT, -- i highly doubt it'll reach thtis
 			threads = {},
 			link_amount = 0,
-			can_disband = false,
+			can_disband = false, -- it can never be disbandable
 			connections = {}
 		}
 		binds[bind] = created
@@ -315,7 +318,7 @@ local function updateGarbageCollectedBinds(): ()
 	local binds = garbage_collected_binds
 	for _, bind in binds do
 		bind.gc_time -= garbage_collector_settings.interval
-		if (bind.gc_time <= 0) then
+		if (bind.gc_time <= CONSTANTS.DEFAULT_GC_CLEANUP_TIME) then
 			garbage_collected_binds[bind.name] = nil
 			destroyGarbageCollectedBind(bind.name)
 		end
@@ -414,9 +417,11 @@ end
 	@public
 	@returns {[string]: BindObject} A dictionary of binds.
 ]]
-local function getAllBinds(): ({
-	[string] : BindObject
-	})
+local function getAllBinds(): (
+	{
+		[string] : BindObject
+	}
+	)
 
 	return binds
 end
@@ -520,7 +525,11 @@ local function modifyGarbageCollectorSettings
 		REASONS.GC_INFO_NOT_GIVEN
 	)
 
-	local interval : number  = (props.interval or garbage_collector_settings.interval or 1)
+	local interval : number  = (
+		props.interval or
+		garbage_collector_settings.interval or
+		CONSTANTS.DEFAULT_GC_CLEAN_INTERVAL
+	)
 	garbage_collector_settings.interval = interval
 end
 
@@ -550,6 +559,7 @@ local function unlinkFunction
 
 	local func_exists = linkExists(bind, func_name)
 	if (not func_exists) then
+		warn(REASONS.FUNC_NOT_FOUND)
 		return
 	end
 	bind.link_amount -= 1
@@ -613,6 +623,44 @@ local function awaitTrigger
 	table.insert(binds[bind_name].threads, coroutine.running())
 
 	return coroutine.yield()
+end
+
+--[[
+	Similar to `trigger` method, but returns a table of each function's return.
+	
+	@public
+	@param {string} bind_name = The bind's name.
+	@param {any} ... - The parameters to be passed.
+	@return {any}
+]]
+local function triggerReturned
+(
+	bind_name : string,
+	... : any	
+): (... any)
+	
+	local bind : BindObject? = findBindByName(bind_name)
+	if (not bind) then
+		warn(REASONS.BIND_NOT_FOUND)
+		return nil
+	end
+	if (table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name)) then
+		warn(REASONS.IS_BUILTIN_BIND)
+		return nil
+	end
+	continueHaltedThreads(bind_name, ...)
+	
+	if (bind.link_amount == 0) then
+		warn(REASONS.NO_FUNCS_LINKED)
+		return nil
+	end
+
+	local links = bind.connections
+	local returns = {}
+	for _, link in links do
+		returns[link.name] = triggerFunc(bind_name, link, ...)
+	end
+	return returns
 end
 
 --[[
@@ -696,6 +744,7 @@ end
 
 --[[
 	Triggers a bind, executing every function connected and resuming threads.
+	Unlike other trigger methods, this one only fires the `onTrigger` method.
 	
 	@public
 	@param {string} bind_name - The bind's name.
@@ -723,7 +772,7 @@ local function trigger
 		warn(REASONS.NO_FUNCS_LINKED)
 		return
 	end
-	
+
 	triggerBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.TRIGGERING, bind_name)
 	local links = bind.connections
 	for _, link in links do
@@ -896,11 +945,11 @@ end
 	@param {string} name - The name of the bind.
 	@returns {void}
 ]]
-local function createBuiltInBindThing
+local function initBuiltInBind
 (
 	name : string	
 ): (BindSignal)
-	
+
 	return {
 		link = function
 		(
@@ -926,9 +975,10 @@ return table.freeze(
 	{
 		newBind		   	    = newBind,
 		overrideBind      = overrideBind,
-		trigger 	  	    = trigger,
+		trigger 	  		  = trigger,
 		triggerDeferred   = triggerDeferred,
 		triggerUnreliable = triggerUnreliable,
+		triggerReturned   = triggerReturned,
 		awaitTrigger      = awaitTrigger,
 		disbandBind 	    = disbandBind,
 		cleanBind   	    = cleanBind,
@@ -943,10 +993,10 @@ return table.freeze(
 			modifySettings  = modifyGarbageCollectorSettings,
 			getSettings     = getGarbageCollectorSettings,
 			getGCedBinds 	  = getGarbageCollectedBindNames,
-			toggle 		      = toggleGarbageCollector,
+			toggle 				  = toggleGarbageCollector,
 		},
-		OnBindAdded		    = createBuiltInBindThing(CONSTANTS.BUILT_IN_BIND_NAMES.ADDED),
-		OnBindDisbanding  = createBuiltInBindThing(CONSTANTS.BUILT_IN_BIND_NAMES.REMOVED),
-		OnTriggerCall     = createBuiltInBindThing(CONSTANTS.BUILT_IN_BIND_NAMES.TRIGGERING)
+		OnBindAdded				= initBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.ADDED),
+		OnBindDisbanding  = initBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.REMOVED),
+		OnTriggerCall     = initBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.TRIGGERING)
 	}
 )
