@@ -303,12 +303,7 @@ end
 
 local function initBuiltInBind(name)
 	return {
-		link = function
-		(
-			func_name : string,
-			func : (bind_name : string) -> ()
-		): ({unlink : () -> ()})
-
+		link = function(func_name, func)
 			linkFunction(name, func_name, func)
 			return {
 				unlink = function()
@@ -316,7 +311,7 @@ local function initBuiltInBind(name)
 				end
 			}
 		end,
-		await = function(): (... any)
+		await = function()
 			return awaitTrigger(name)
 		end,
 	}
@@ -343,4 +338,5 @@ return table.freeze(
 		OnBindDisbanding  = initBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.REMOVED),
 		OnTriggerCall     = initBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.TRIGGERING)
 	}
+
 )
