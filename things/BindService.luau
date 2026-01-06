@@ -26,14 +26,28 @@
 		* Trigger function that returns every function's return value (DONE)
 		* Developer mode
 		* make error/warn messages show where error happened
-			instead of throwing vaguely
+			instead of throwing vaguely (done in a way)
 		* Bind security (done?)
+		* change way of documentation for moonwave
 ]]
 
 -- External imports
 
 -- Types
 --------------------------------------------------------------
+
+type BindHistory = {
+  [number]: {
+    bind_name       : string,
+    typeof_trigger  : string,
+    time_activated : number
+  }
+}
+
+type GCedBind = {
+  name    : string,
+  gc_time : number
+}
 
 type GarbageCollectorSettings = {
   enabled  : boolean,
@@ -104,7 +118,8 @@ local CONSTANTS = {
     REMOVED = "REMOVED",
     TRIGGERING = "TRIGGERING"
   },
-  BUILT_IN_BIND_LINK_LIMIT  = 64
+  BUILT_IN_BIND_LINK_LIMIT  = 64,
+  DEFAULT_TRIGGER_LIMIT     = 32 -- 32 triggers max a second
 }
 
 local REASONS = {
@@ -120,22 +135,21 @@ local REASONS = {
   GC_TOGGLE_IS_NIL   = `[{script}] - Garbage Collector toggle not provided.`,
   GC_IS_DISABLED     = `[{script}] - Tried to add garbage collected Bind when Garbage Collector is disabled.`,
   IS_BUILTIN_BIND    = `[{script}] - Tried to override built in bind.`,
-  IS_LOCKED          = `[{script}] - Tried to interact with a locked bind with no/invalid thread. Bind Name: `
+  IS_LOCKED          = `[{script}] - Tried to interact with a locked bind with no/invalid thread. Bind Name: `,
+  REACHED_MAX_TRIG   = `[{script}] - Reached max triggers in a step.`
 }
 
 local garbage_collector_settings : GarbageCollectorSettings = {
   enabled 			 = CONSTANTS.DEFAULT_GC_MODE,
   interval			 = CONSTANTS.DEFAULT_GC_CLEAN_INTERVAL
 }
-
-local service_running : boolean = false
-local binds : {[string]: BindObject} = {}
-local garbage_collected_binds : {
-  [string]: {
-    name    : string,
-    gc_time : number
-  }
-} = {}
+local service_running           : boolean = false
+local binds                     : {[string]: BindObject} = {}
+local garbage_collected_binds   : {[string]: GCedBind} = {}
+local bind_trigger_history      : BindHistory = {}
+local bind_triggers_step        : number = 1
+local bind_max_triggers_in_step : number = CONSTANTS.DEFAULT_TRIGGER_LIMIT
+local binds_triggered_in_step   : number = 0
 
 -- Private Functions
 --------------------------------------------------------------
@@ -367,10 +381,11 @@ end
 local function serviceLoop(): ()
   while (true) do
     task.wait(CONSTANTS.DEFAULT_GC_CLEAN_INTERVAL)
+    binds_triggered_in_step = 0
     if ( not garbage_collector_settings.enabled ) then
       cleanGarbageCollectedBinds()
-      service_running = false
-      return
+      --service_running = false
+      --return
     end
     if ( not next(garbage_collected_binds) ) then
       continue
@@ -394,8 +409,54 @@ local function serviceInit(): ()
   task.spawn(serviceLoop)
 end
 
+-- Public Debug Functions
+--------------------------------------------------------------
+
+--[[
+  Returns trigger history.
+  
+  @public
+  @returns {BindHistory}
+]]
+local function getTriggerHistory(): (BindHistory)
+  return bind_trigger_history
+end
+
+--[[
+  WORK IN PROGRESS
+]]
+local function profileBind
+(
+  bind_name : string  
+): ()
+  
+  assert(
+    bind_name,
+    REASONS.NAME_NOT_PROVIDED
+  )
+  
+  local bind : BindObject? = findBindByName(bind_name)
+  if ( not bind ) then
+    warn(REASONS.BIND_NOT_FOUND)
+    return
+  end
+  --TODO: add profiling info stuff
+end
+
 -- Public Utility Functions
 --------------------------------------------------------------
+
+local function setTriggerLimit
+(
+  new_limit : number  
+): ()
+  
+  assert(
+    new_limit,
+    `Limit not provided while setting trigger limit`
+  )
+  
+end
 
 --[[
   Returns whether or not a bind is locked with a thread.
@@ -466,8 +527,8 @@ end
 ]]
 local function getAllBinds(): (
   { [string] : BindObject }
-)
-
+  )
+  
   return binds
 end
 
@@ -708,6 +769,11 @@ local function triggerReturned
   bind_name : string,
   args : {any}?
 ): (... any)
+  
+  if ( binds_triggered_in_step >= bind_max_triggers_in_step ) then
+    warn(REASONS.REACHED_MAX_TRIG)
+    return nil
+  end
 
   local bind : BindObject? = findBindByName(bind_name)
   if ( not bind ) then
@@ -718,6 +784,15 @@ local function triggerReturned
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return nil
   end
+  binds_triggered_in_step += 1
+  table.insert(
+      bind_trigger_history,
+      {
+        bind_name      = bind_name,
+        typeof_trigger = `return`,
+        time_activated = tick()
+      }
+    )
   continueHaltedThreads(bind_name, args)
 
   if ( bind.link_amount == 0 ) then
@@ -747,6 +822,11 @@ local function triggerDeferred
   bind_name : string,
   args 			: {any}?
 ): ()
+  
+  if ( binds_triggered_in_step >= bind_max_triggers_in_step ) then
+    warn(REASONS.REACHED_MAX_TRIG)
+    return
+  end
 
   local bind : BindObject? = findBindByName(bind_name)
   if ( not bind ) then
@@ -757,13 +837,22 @@ local function triggerDeferred
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
+  binds_triggered_in_step += 1
+  table.insert(
+    bind_trigger_history,
+    {
+      bind_name      = bind_name,
+      typeof_trigger = `deferred`,
+      time_activated = tick()
+    }
+  )
   continueHaltedThreads(bind_name, args)
 
   if ( bind.link_amount == 0 ) then
     warn(REASONS.NO_FUNCS_LINKED, bind_name)
     return
   end
-
+    
   local links = bind.connections
   for _, link in links do
     task.defer(
@@ -789,7 +878,12 @@ local function triggerUnreliable
   bind_name : string,
   args      : {any}?
 ): ()
-
+  
+  if ( binds_triggered_in_step >= bind_max_triggers_in_step ) then
+    warn(REASONS.REACHED_MAX_TRIG)
+    return
+  end
+  
   local bind : BindObject? = findBindByName(bind_name)
   if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
@@ -799,6 +893,15 @@ local function triggerUnreliable
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
+  binds_triggered_in_step += 1
+  table.insert(
+    bind_trigger_history,
+    {
+      bind_name      = bind_name,
+      typeof_trigger = `unreliable`,
+      time_activated = tick()
+    }
+  )
   continueHaltedThreads(bind_name, args)
 
   if ( bind.link_amount == 0 ) then
@@ -826,6 +929,11 @@ local function trigger
   bind_name : string,
   args			: {any}?
 ): ()
+  
+  if ( binds_triggered_in_step >= bind_max_triggers_in_step ) then
+    warn(REASONS.REACHED_MAX_TRIG)
+    return
+  end
 
   local bind : BindObject? = findBindByName(bind_name)
   if ( not bind ) then
@@ -836,6 +944,15 @@ local function trigger
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
+  binds_triggered_in_step += 1
+  table.insert(
+    bind_trigger_history,
+    {
+      bind_name      = bind_name,
+      typeof_trigger = `default`,
+      time_activated = tick()
+    }
+  )
   continueHaltedThreads(bind_name, args)
 
   if ( bind.link_amount == 0 ) then
@@ -1084,6 +1201,9 @@ return table.freeze(
       getSettings       = getGarbageCollectorSettings,
       getGCedBinds 	    = getGarbageCollectedBindNames,
       toggle 				    = toggleGarbageCollector,
+    },
+    debugging         = {
+      
     },
     OnBindAdded				= initBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.ADDED),
     OnBindDisbanding  = initBuiltInBind(CONSTANTS.BUILT_IN_BIND_NAMES.REMOVED),
