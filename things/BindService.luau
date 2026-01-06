@@ -40,23 +40,23 @@ type GarbageCollectorSettings = {
   interval : number
 }
 
-type GarbageCollectorProps = {
+export type GarbageCollectorProps = {
   enabled    : boolean?,
   interval   : number?
 }
 
-type LinkProps = {
+export type LinkProps = {
   happen_once : boolean?
 }
 
-type BindObjectProps = {
+export type BindObjectProps = {
   can_disband : boolean?,
   link_limit  : number?,
   decay_time  : number?, -- automatically gives it to gc list if this arg is provided
   thread_to_lock : thread?
 }
 
-export type BindSignal = {
+type BindSignal = {
   link : (
     func_name : string,
     func      : (
@@ -69,13 +69,13 @@ export type BindSignal = {
   )
 }
 
-export type Link = {
+type Link = {
   name : string,
   func : (... any) -> (... any),
   once : boolean
 }
 
-export type BindObject = {
+type BindObject = {
   connections : {
     [string] : Link
   },
@@ -93,18 +93,18 @@ export type BindObject = {
 
 -- Modify as needed
 local CONSTANTS = {
-  LINK_LIMIT      = 8, -- useful for preventing memory leaks 
-  DEFAULT_ONCE    = false,
-  DEFAULT_GC_MODE = false, -- garbage collected,
+  LINK_LIMIT                = 8, -- useful for preventing memory leaks 
+  DEFAULT_ONCE              = false,
+  DEFAULT_GC_MODE           = false, -- garbage collected,
   DEFAULT_GC_CLEAN_INTERVAL = 2, -- clean gc'd binds after some time,
-  DEFAULT_GC_CLEANUP_TIME = 0,
-  DEFAULT_CLEAN_GC_BINDS = true, -- clean gc'd binds if gc gets disabled,
-  BUILT_IN_BIND_NAMES = {
+  DEFAULT_GC_CLEANUP_TIME   = 0,
+  DEFAULT_CLEAN_GC_BINDS    = true, -- clean gc'd binds if gc gets disabled,
+  BUILT_IN_BIND_NAMES       = {
     ADDED = "ADDED",
     REMOVED = "REMOVED",
     TRIGGERING = "TRIGGERING"
   },
-  BUILT_IN_BIND_LINK_LIMIT = 64
+  BUILT_IN_BIND_LINK_LIMIT  = 64
 }
 
 local REASONS = {
@@ -152,12 +152,12 @@ local function findBindByName
   bind_name : string	
 ): (BindObject)?
 
-  if (not bind_name) then
+  if ( not bind_name ) then
     warn(REASONS.NAME_NOT_PROVIDED, bind_name)
     return nil
   end
   local found_bind = binds[bind_name]
-  if (not found_bind) then
+  if ( not found_bind ) then
     return nil
   end
 
@@ -179,7 +179,7 @@ local function linkExists
 ): (boolean)
 
   local found = bind.connections[func_name]
-  if (not found) then
+  if ( not found ) then
     warn(REASONS.FUNC_NOT_FOUND, bind, func_name)
     return false
   end
@@ -201,14 +201,14 @@ local function canAccessBind
   thread : thread?
 ): (boolean)
   
-  if (not bind.thread_lock) then
+  if ( not bind.thread_lock ) then
     return true
   end
-  if (not thread) then
+  if ( not thread ) then
     warn(REASONS.IS_LOCKED, bind.name)
     return false
   end
-  if (bind.thread_lock ~= thread) then
+  if ( bind.thread_lock ~= thread ) then
     warn(REASONS.IS_LOCKED, bind.name)
     return false
   end
@@ -232,15 +232,15 @@ local function triggerFunc
 ): (... any)
 
   local func = link.func
-  if (not func) then
+  if ( not func ) then
     return nil
   end	
   local success, result = pcall(func, ...)
-  if (link.once) then
+  if ( link.once ) then
     binds[bind_name].connections[link.name] = nil
     binds[bind_name].link_amount -= 1
   end
-  if (success) then
+  if ( success ) then
     return result
   end
   warn(`Error of "{result}" encountered while triggering bind. Bind Name: {bind_name}`)
@@ -261,7 +261,7 @@ local function continueHaltedThreads
   ...       : any
 ): ()
 
-  if (#binds[bind_name].threads == 0) then
+  if ( #binds[bind_name].threads == 0 ) then
     return
   end
 
@@ -317,7 +317,7 @@ end
 	@returns {void}
 ]]
 local function cleanGarbageCollectedBinds(): ()
-  if (not CONSTANTS.DEFAULT_CLEAN_GC_BINDS) then
+  if ( not CONSTANTS.DEFAULT_CLEAN_GC_BINDS ) then
     return
   end
   garbage_collected_binds = {}
@@ -334,7 +334,7 @@ local function destroyGarbageCollectedBind
   bind_name: string
 ): ()
   local found_correlating_bind = findBindByName(bind_name)
-  if (not found_correlating_bind) then
+  if ( not found_correlating_bind ) then
     warn(REASONS.GC_BIND_NOT_FOUND, bind_name)
     return
   end
@@ -351,7 +351,7 @@ local function updateGarbageCollectedBinds(): ()
   local binds = garbage_collected_binds
   for _, bind in binds do
     bind.gc_time -= garbage_collector_settings.interval
-    if (bind.gc_time <= CONSTANTS.DEFAULT_GC_CLEANUP_TIME) then
+    if ( bind.gc_time <= CONSTANTS.DEFAULT_GC_CLEANUP_TIME ) then
       garbage_collected_binds[bind.name] = nil
       destroyGarbageCollectedBind(bind.name)
     end
@@ -367,12 +367,12 @@ end
 local function serviceLoop(): ()
   while (true) do
     task.wait(CONSTANTS.DEFAULT_GC_CLEAN_INTERVAL)
-    if (not garbage_collector_settings.enabled) then
+    if ( not garbage_collector_settings.enabled ) then
       cleanGarbageCollectedBinds()
       service_running = false
       return
     end
-    if (not next(garbage_collected_binds)) then
+    if ( not next(garbage_collected_binds) ) then
       continue
     end
     task.defer(updateGarbageCollectedBinds)
@@ -386,7 +386,7 @@ end
 	@returns {void}
 ]]
 local function serviceInit(): ()
-  if (service_running) then
+  if ( service_running ) then
     return
   end
   createBuiltInBinds()
@@ -408,7 +408,7 @@ local function isBindLocked
   bind_name : string  
 ): (boolean)
 
-  return (binds[bind_name].thread_lock and true or false)
+  return ( binds[bind_name].thread_lock and true or false )
 end
 
 --[[
@@ -428,7 +428,7 @@ end
 	@returns {[string]: string} An array of bind names.
 ]]
 local function getAllBindNames(): ({[string]: string})
-  if (not next(binds)) then
+  if ( not next(binds) ) then
     return {}
   end
 
@@ -452,7 +452,7 @@ local function getBind
 ): (BindObject?)
 
   local found_bind = findBindByName(bind_name)
-  if (found_bind) then
+  if ( found_bind ) then
     return found_bind
   end
   return nil
@@ -465,10 +465,8 @@ end
 	@returns {[string]: BindObject} A dictionary of binds.
 ]]
 local function getAllBinds(): (
-  {
-    [string] : BindObject
-  }
-  )
+  { [string] : BindObject }
+)
 
   return binds
 end
@@ -489,13 +487,13 @@ local function isBindGCed
 ): (boolean)
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return false
   end
 
   local in_garbage_collector = garbage_collected_binds[bind_name]
-  if (in_garbage_collector) then
+  if ( in_garbage_collector ) then
     return true
   end
   return false
@@ -508,7 +506,7 @@ end
 	@returns {[string]: string} - A list of bind names.
 ]]
 local function getGarbageCollectedBindNames(): ({[string]: string})
-  if (not next(garbage_collected_binds)) then
+  if ( not next(garbage_collected_binds) ) then
     return {}
   end
 
@@ -547,8 +545,8 @@ local function toggleGarbageCollector
   )
   garbage_collector_settings.enabled = enabled
 
-  if (enabled) then -- what is this bro
-    if (service_running) then
+  if ( enabled ) then -- what is this bro
+    if ( service_running ) then
       return
     end
     task.spawn(serviceInit)
@@ -598,11 +596,11 @@ local function unlockBind
 ): ()
   
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (not canAccessBind(bind, thread)) then
+  if ( not canAccessBind(bind, thread) ) then
     return
   end
   binds[bind_name].thread_lock = nil
@@ -624,13 +622,13 @@ local function unlinkFunction
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
 
   local func_exists = linkExists(bind, func_name)
-  if (not func_exists) then
+  if ( not func_exists ) then
     warn(REASONS.FUNC_NOT_FOUND, bind_name, func_name)
     return
   end
@@ -657,11 +655,11 @@ local function linkFunction
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (bind.link_amount >= bind.link_limit) then
+  if ( bind.link_amount >= bind.link_limit ) then
     warn(REASONS.LINK_LIMIT_REACHED, bind_name)
     return
   end
@@ -688,7 +686,7 @@ local function awaitTrigger
 ): (... any)
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
@@ -712,17 +710,17 @@ local function triggerReturned
 ): (... any)
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return nil
   end
-  if (table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name)) then
+  if ( table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name) ) then
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return nil
   end
   continueHaltedThreads(bind_name, args)
 
-  if (bind.link_amount == 0) then
+  if ( bind.link_amount == 0 ) then
     warn(REASONS.NO_FUNCS_LINKED, bind_name)
     return nil
   end
@@ -751,17 +749,17 @@ local function triggerDeferred
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name)) then
+  if ( table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name) ) then
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
   continueHaltedThreads(bind_name, args)
 
-  if (bind.link_amount == 0) then
+  if ( bind.link_amount == 0 ) then
     warn(REASONS.NO_FUNCS_LINKED, bind_name)
     return
   end
@@ -793,17 +791,17 @@ local function triggerUnreliable
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name)) then
+  if ( table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name) ) then
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
   continueHaltedThreads(bind_name, args)
 
-  if (bind.link_amount == 0) then
+  if ( bind.link_amount == 0 ) then
     warn(REASONS.NO_FUNCS_LINKED, bind_name)
     return
   end
@@ -830,17 +828,17 @@ local function trigger
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name)) then
+  if ( table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name) ) then
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
   continueHaltedThreads(bind_name, args)
 
-  if (bind.link_amount == 0) then
+  if ( bind.link_amount == 0 ) then
     warn(REASONS.NO_FUNCS_LINKED, bind_name)
     return
   end
@@ -867,7 +865,7 @@ local function resumeBind
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND)
     return
   end
@@ -889,11 +887,11 @@ local function cleanBind
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (not canAccessBind(bind, thread)) then
+  if ( not canAccessBind(bind, thread) ) then
     return
   end
 
@@ -916,15 +914,15 @@ local function overrideBind
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name)) then
+  if ( table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name) ) then
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
-  if (not canAccessBind(bind, thread)) then
+  if ( not canAccessBind(bind, thread) ) then
     return
   end
 
@@ -946,19 +944,19 @@ local function disbandBind
 ): ()
 
   local bind : BindObject? = findBindByName(bind_name)
-  if (not bind) then
+  if ( not bind ) then
     warn(REASONS.BIND_NOT_FOUND, bind_name)
     return
   end
-  if (not bind.can_disband) then
+  if ( not bind.can_disband ) then
     warn(REASONS.NOT_DISBANDABLE, bind_name)
     return
   end
-  if (table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name)) then
+  if ( table.find(CONSTANTS.BUILT_IN_BIND_NAMES, bind_name) ) then
     warn(REASONS.IS_BUILTIN_BIND, bind_name)
     return
   end
-  if (not canAccessBind(bind, thread)) then
+  if ( not canAccessBind(bind, thread) ) then
     return
   end
   continueHaltedThreads(bind_name, nil)
@@ -983,7 +981,7 @@ local function newBind
 ): ()
 
   local bind_exists : BindObject? = findBindByName(bind_name)
-  if (bind_exists) then
+  if ( bind_exists ) then
     warn(REASONS.BIND_EXISTS)
     return
   end
@@ -1005,8 +1003,8 @@ local function newBind
   }
   binds[bind_name] = bind
 
-  if (new_props.decay_time) then
-    if (not garbage_collector_settings.enabled) then
+  if ( new_props.decay_time ) then
+    if ( not garbage_collector_settings.enabled ) then
       warn(REASONS.GC_IS_DISABLED)
       return
     end
@@ -1016,7 +1014,7 @@ local function newBind
       gc_time = new_props.decay_time
     }
   end
-  if (new_props.thread_to_lock) then
+  if ( new_props.thread_to_lock ) then
     binds[bind_name].thread_lock = new_props.thread_to_lock
   end
 
